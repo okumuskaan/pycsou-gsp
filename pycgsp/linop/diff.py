@@ -11,10 +11,15 @@ Graph differential operators.
 import numpy as np
 import pygsp
 
-from pycsou.core.linop import LinearOperator
-from pycsou.linop.base import SparseLinearOperator, IdentityOperator, PolynomialLinearOperator
+import pycsou.abc as pyca
+import pycsou.runtime as pycrt
+import pycsou.util as pycu
+import pycsou.util.ptype as pyct
+import pygsp
+from pycsou.operator.linop.base import IdentityOp
+from conv import PolyLinOp, GraphConvolution
 
-class GraphLaplacian(LinearOperator):
+class GraphLaplacian(pyca.LinOp):
     r"""
     Graph Laplacian.
 
@@ -80,7 +85,7 @@ class GraphLaplacian(LinearOperator):
 
     """
 
-    def __init__(self, Graph: pygsp.graphs.Graph, dtype: type = np.float):
+    def __init__(self, Graph: pygsp.graphs.Graph, dtype: type=np.float):
         r"""
         Parameters
         ----------
@@ -105,18 +110,19 @@ class GraphLaplacian(LinearOperator):
             raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
         else:
             self.L = self.Graph.L.tocsc()
-        super(GraphLaplacian, self).__init__(shape=self.Graph.W.shape, dtype=dtype, is_explicit=False,
-                                             is_dense=False, is_sparse=False, is_dask=False,
-                                             is_symmetric=True)
+            
+        super(GraphLaplacian, self).__init__(shape=self.Graph.W.shape)
 
-    def __call__(self, x: np.ndarray) -> np.ndarray:
-        return self.L.dot(x)
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        return self.L.dot(arr)
 
-    def adjoint(self, y: np.ndarray) -> np.ndarray:
-        return self(y)
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
+        return self(arr) # since it's self-adjoint
 
 
-class GraphGradient(LinearOperator):
+class GraphGradient(pyca.LinOp):
     r"""
     Graph gradient.
 
@@ -162,7 +168,7 @@ class GraphGradient(LinearOperator):
 
     """
 
-    def __init__(self, Graph: pygsp.graphs.Graph, dtype: type = np.float):
+    def __init__(self, Graph: pygsp.graphs.Graph):
         r"""
         Parameters
         ----------
@@ -182,15 +188,15 @@ class GraphGradient(LinearOperator):
                 r'Please compute the differential operator of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_differential_operator')
         else:
             self.D = self.Graph.D.tocsc()
-        super(GraphGradient, self).__init__(shape=self.Graph.W.shape, dtype=dtype, is_explicit=False,
-                                            is_dense=False, is_sparse=False, is_dask=False,
-                                            is_symmetric=True)
+        super(GraphGradient, self).__init__(shape=self.Graph.W.shape)
 
-    def __call__(self, x: np.ndarray) -> np.ndarray:
-        return self.D.dot(x)
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        return self.D.dot(arr)
 
-    def adjoint(self, y: np.ndarray) -> np.ndarray:
-        return self.D.conj().transpose().dot(y)
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
+        return self.D.conj().transpose().dot(arr)
 
 
 def GeneralisedGraphLaplacian(Graph: pygsp.graphs.Graph, kind: str = 'iterated', **kwargs):
@@ -271,23 +277,23 @@ def GeneralisedGraphLaplacian(Graph: pygsp.graphs.Graph, kind: str = 'iterated',
     if Graph.L is None:
         raise AttributeError(
             r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
-    elif Graph.lap_type != 'normalized':
+    elif Graph.lap_type != 'normalized":
         raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
     else:
         L = Graph.L.tocsc()
-        LapOp = SparseLinearOperator(L, is_symmetric=True)
-
-    if kind == 'iterated':
+        LapOp = pyca.LinOp.from_array(L)
+        
+    if kind == "iterated":
         N = kwargs['order']
         Dgen = LapOp ** N
-    elif kind == 'sobolev':
-        I = IdentityOperator(size=LapOp.shape[0] * LapOp.shape[1])
+    elif kind == "sobolev":
+        I = IdentityOp(size=LapOp.shape[0] * LapOp.shape[1])
         alpha = kwargs['constant']
         N = kwargs['order']
         Dgen = ((alpha ** 2) * I - LapOp) ** N
-    elif kind == 'polynomial':
-        coeffs = kwargs['coeffs']
-        Dgen = PolynomialLinearOperator(LinOp=LapOp, coeffs=coeffs)
+    elif kind == "polynomial":
+        coeffs = kwargs["coeffs"]
+        Dgen = PolyLinOp(LinOp=LapOp, coeffs=coeffs)
     else:
         raise NotImplementedError(
             'Supported generalised Laplacian types are: iterated, sobolev, polynomial.')
