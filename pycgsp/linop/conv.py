@@ -7,15 +7,45 @@
 r"""
 Graph convolution operator.
 """
-from typing import Union
 
-import numpy as np
+import pycsou.abc as pyca
+import pycsou.runtime as pycrt
+import pycsou.util as pycu
+import pycsou.util.ptype as pyct
 import pygsp
 
-from pycsou.linop.base import SparseLinearOperator, PolynomialLinearOperator
+class PolyLinOp(pyca.LinOp):
+    """
+        Polynomial Linear Operator
+    """
+    
+    def __init__(self, LinOp: pyca.LinOp, coeffs: pyct.NDArray):
+        self.LinOp = LinOp
+        self.coeffs = coeffs
+        #self._lipschitz = ...
+        
+        super(PolyLinOp, self).__init__(shape=LinOp.shape)
+        
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        y = self.coeffs[0] * arr
+        z = arr
+        for i in range(1, len(self.coeffs)):
+            z = self.LinOp(z)
+            y += self.coeffs[i] * z
+        return y
+            
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
+        xp = pycu.get_array_module(arr)
+        z = arr
+        y = xp.conj(self.coeffs[0]) * arr
+        for i in range(1, len(self.coeffs)):
+            z = self.LinOp.adjoint(z)
+            y += xp.conj(self.coeffs[i]) * z
+        return y
 
-
-class GraphConvolution(PolynomialLinearOperator):
+class GraphConvolution(PolyLinOp):
     r"""
     Graph convolution.
 
@@ -89,7 +119,7 @@ class GraphConvolution(PolynomialLinearOperator):
 
     """
 
-    def __init__(self, Graph: pygsp.graphs.Graph, coefficients: Union[np.ndarray, list, tuple]):
+    def __init__(self, Graph: pygsp.graphs.Graph, coefficients: pyct.NDArray):
         r"""
         Parameters
         ----------
@@ -109,12 +139,12 @@ class GraphConvolution(PolynomialLinearOperator):
         """
         self.Graph = Graph
         if Graph.L is None:
-            raise AttributeError(
-                r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
+            raise AttributeError(r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
         elif Graph.lap_type != 'normalized':
             raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
         else:
             L = self.Graph.L.tocsc()
-            Lop = SparseLinearOperator(L, is_symmetric=True)
+            Lop = pyca.LinOp.from_array(L)
         self.coefficients = coefficients
         super(GraphConvolution, self).__init__(LinOp=Lop, coeffs=self.coefficients)
+
