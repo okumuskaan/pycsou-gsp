@@ -6,295 +6,355 @@
 
 r"""
 Graph differential operators.
+
+This module provides various graph differential operators that are based on ``pycsou.abc.core.LinOp``.
+
+.. rubric:: Classes for Differential Operators
+
+.. autosummary::
+
+  GraphGradient
+  GraphDivergence
+  GraphLaplacian
+  GraphHessian
+
 """
 
+import typing as typ
+
+import numba as nb
 import numpy as np
-import pygsp
 
 import pycsou.abc as pyca
-import pycsou.runtime as pycrt
 import pycsou.util as pycu
 import pycsou.util.ptype as pyct
+import pycsou.runtime as pycrt
+import pycgsp.core as pycgspc
 import pygsp
-from pycsou.operator.linop.base import IdentityOp
-from conv import PolyLinOp, GraphConvolution
-
-class GraphLaplacian(pyca.LinOp):
-    r"""
-    Graph Laplacian.
-
-    Normalised graph Laplacian for signals defined on graphs.
-
-    Examples
-    --------
-
-    .. plot::
-
-       import numpy as np
-       from pygsp.graphs import Ring
-       from pycgsp.linop.diff import GraphLaplacian
-       np.random.seed(1)
-       G = Ring(N=32, k=4)
-       G.compute_laplacian(lap_type='normalized')
-       G.set_coordinates(kind='spring')
-       x = np.arange(G.N)
-       signal = np.piecewise(x, [x < G.N//3, (x >= G.N//3) * (x< 2 * G.N//3), x>=2 * G.N//3], [lambda x: -x, lambda x: 3 * x - 4 * G.N//3, lambda x: -0.5 * x + G.N])
-       Lap = GraphLaplacian(Graph=G)
-       lap_sig = Lap * signal
-       plt.figure()
-       ax=plt.gca()
-       G.plot_signal(signal, ax=ax, backend='matplotlib')
-       plt.title('Signal')
-       plt.axis('equal')
-       plt.figure()
-       plt.plot(signal)
-       plt.title('Signal')
-       plt.figure()
-       ax=plt.gca()
-       G.plot_signal(lap_sig, ax=ax, backend='matplotlib')
-       plt.title('Laplacian of signal')
-       plt.axis('equal')
-       plt.figure()
-       plt.plot(-lap_sig)
-       plt.title('Laplacian of signal')
-
-    Notes
-    -----
-    For undirected graphs, the normalized graph Laplacian is defined as
-
-    .. math:: \mathbf{L} = \mathbf{I} - \mathbf{D}^{-1/2} \mathbf{W} \mathbf{D}^{-1/2},
-
-    where :math:`\mathbf{I}` is the identity matrix, :math:`\mathbf{W}` is the weighted adjacency matrix and :math:`\mathbf{D}` the
-    weighted degree matrix.
-
-    For directed graphs, the Laplacians are built from a symmetrized
-    version of the weighted adjacency matrix that is the average of the
-    weighted adjacency matrix and its transpose. As the Laplacian is
-    defined as the divergence of the gradient, it is not affected by the
-    orientation of the edges.
-
-    For both Laplacians, the diagonal entries corresponding to disconnected
-    nodes (i.e., nodes with degree zero) are set to zero.
-
-    The ``GraphLaplacian`` operator is self-adjoint.
-
-    See Also
-    --------
-    :py:class:`~pycgsp.linop.diff.GraphGradient`, :py:func:`~pycgsp.linop.diff.GeneralisedGraphLaplacian`
-    :py:class:`~pycgsp.linop.conv.GraphConvolution`
-
-    """
-
-    def __init__(self, Graph: pygsp.graphs.Graph, dtype: type=np.float):
-        r"""
-        Parameters
-        ----------
-        Graph: `pygsp.graphs.Graph <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph>`_
-            Graph on which the signal is defined, with normalised Laplacian ``Graph.L`` precomputed (see `pygsp.graphs.Graph.compute_laplacian(lap_type='normalized') <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian>`_.
-        dtype: type
-            Type of the entries of the graph filer.
-
-        Raises
-        ------
-        AttributeError
-            If ``Graph.L`` does not exist.
-        NotImplementedError
-            If ``Graph.lap_type`` is 'combinatorial'.
-
-        """
-        self.Graph = Graph
-        if Graph.L is None:
-            raise AttributeError(
-                r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
-        elif Graph.lap_type != 'normalized':
-            raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
-        else:
-            self.L = self.Graph.L.tocsc()
-            
-        super(GraphLaplacian, self).__init__(shape=self.Graph.W.shape)
-
-    @pycrt.enforce_precision(i="arr")
-    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
-        return self.L.dot(arr)
-
-    @pycrt.enforce_precision(i="arr")
-    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
-        return self(arr) # since it's self-adjoint
 
 
 class GraphGradient(pyca.LinOp):
     r"""
-    Graph gradient.
-
-    Gradient operator for signals defined on graphs.
-
+    Graph gradient operator.
+    
+    Bases: ``pycsou.abc.operator.LinOp``
+    
+    Given a graph signal :math:`\mathbf{f} \in \mathbf{R}^N`, where :math:`N = |\mathcal{V}|`, the graph gradient, :math:`\nabla_{\mathcal{G}} : \mathbb{R}^N \rightarrow \mathbb{R}^{N \times N}` , is defined as
+    
+    .. math::
+        {(\nabla_{\mathcal{G}}\mathbf{f})_{ij} = \sqrt{w_{ij}} (\mathbf{f}_i - \mathbf{f}_j)}
+        
+    This is the approximation of the first derivative of a signal using finite-differences on irregular domain such as graphs.
+        
+    Adjoint of graph gradient, :math:`\nabla^*_{\mathcal{G}} : \mathbb{R}^{N \times N} \rightarrow \mathbb{R}^{N}`, is graph divergence:
+    
+    .. math::
+        {(\nabla^*_{\mathcal{G}}\mathbf{F})_i = \sum_{j \in \mathcal{V}} \sqrt{w_{ij}} \mathbf{F}_{ij}}
+    
     Examples
     --------
-
-    .. testsetup::
-
-       import numpy as np
-       from pygsp.graphs import Ring
-       from pycgsp.linop.diff import GraphLaplacian, GraphGradient
-       np.random.seed(1)
-
-    .. doctest::
-
-       >>> G = Ring(N=32, k=4)
-       >>> G.compute_laplacian(lap_type='normalized')
-       >>> G.compute_differential_operator()
-       >>> G.set_coordinates(kind='spring')
-       >>> x = np.arange(G.N)
-       >>> signal = np.piecewise(x, [x < G.N//3, (x >= G.N//3) * (x< 2 * G.N//3), x>=2 * G.N//3], [lambda x: -x, lambda x: 3 * x - 4 * G.N//3, lambda x: -0.5 * x + G.N])
-       >>> Lap = GraphLaplacian(Graph=G)
-       >>> Grad = GraphGradient(Graph=G)
-       >>> lap_sig = Lap * signal
-       >>> lap_sig2 = Grad.adjoint(Grad(signal))
-       >>> np.allclose(lap_sig, lap_sig2)
-       True
-
-    Notes
-    -----
-    The adjoint of the ``GraphGradient`` operator is called the graph divergence operator.
-
-    Warnings
-    --------
-    In the newest version of PyGSP (> 0.5.1) the convention is changed: ``Graph.D`` is the divergence operator and
-    ``Graph.D.transpose()`` the gradient (see routine `Graph.compute_differential_operator <https://pygsp.readthedocs.io/en/latest/reference/graphs.html#pygsp.graphs.Graph.compute_differential_operator>`_). The code should be adapted when this new version is released.
-
+    >>> import pycgsp.linop.diff as pycgspd
+    >>> import pycgsp.core.graph as pycgspg
+    >>> import pycgsp.core.plot as pycgspp
+    >>> import pygsp.graphs as pygspg
+    >>> import numpy as np
+    >>> vec = np.arange(5)
+    >>> W = np.array([[0,2,0,3,0], [2,0,0,0,0], [0,0,0,1,0], [3,0,1,0,2], [0,0,0,2,0]])
+    >>> G1 = pycgspg.Graph(W)
+    >>> G2 = pygspg.Graph(W)
+    >>> G1Grad = pycgspd.GraphGradient(G1)
+    >>> G2Grad = pycgspd.GraphGradient(G2)
+    >>> grad_arr_1 = G1Grad(vec)
+    >>> grad_arr_2 = G2Grad(vec)
+    >>> G2.compute_differential_operator()
+    >>> grad_arr_pygsp = G2.grad(vec)
+    >>> np.allclose(grad_arr_1, grad_arr_2)
+    True
+    >>> data_pos = grad_arr_1[grad_arr_1>0]
+    >>> np.allclose(data_pos, grad_arr_pygsp)
+    True
+    
     See Also
     --------
-    :py:class:`~pycgsp.linop.diff.GraphLaplacian`, :py:func:`~pycgsp.linop.diff.GeneralisedGraphLaplacian`
-
+    ``GraphDivergence``
     """
-
-    def __init__(self, Graph: pygsp.graphs.Graph):
+    #GraphSpec = typ.Union[pycgspc.Graph, pygsp.graphs.Graph]
+    
+    
+    def __init__(self, Graph):#: typ.Union[pycgspc.graph.Graph, pygsp.graphs.Graph]):#: GraphSpec):
         r"""
         Parameters
         ----------
-        Graph: `pygsp.graphs.Graph <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph>`_
-            Graph on which the signal is defined, with differential operator ``Graph.D`` precomputed (see `pygsp.graphs.Graph.compute_differential_operator() <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_differential_operator>`_.
-        dtype: type
-            Type of the entries of the graph filer.
-
-        Raises
-        ------
-        AttributeError
-            If ``Graph.D`` does not exist.
+        Graph: ``pycgsp.core.Graph`` or ``pygsp.graphs.Graph``
+            Graph object.
         """
-        self.Graph = Graph
-        if Graph.D is None:
-            raise AttributeError(
-                r'Please compute the differential operator of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_differential_operator')
+        
+        self.W = Graph.W.tocoo()
+        self._out = self.W.copy()
+        self._adj_out = None
+        self._N = Graph.N
+        
+        super().__init__(shape=(Graph.Ne, Graph.N))
+        
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray):
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array.
+        
+        Returns
+        -------
+        Sparse.coo_matrix
+            Output of divergence array
+        """
+        xp = pycu.get_array_module(arr)
+        self._adj_out = xp.zeros((self._N,))
+        diff = arr[self.W.row] - arr[self.W.col]
+        self._out.data = diff * (self.W.data**0.5)
+        return self._out
+
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr) -> pyct.NDArray:#: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: Sparse array
+            Input array.
+            
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output of adjoint of divergence array
+        """
+        arr = arr.tocoo()
+        if self._adj_out is None:
+            self._adj_out = np.zeros((self._N,))
         else:
-            self.D = self.Graph.D.tocsc()
-        super(GraphGradient, self).__init__(shape=self.Graph.W.shape)
-
-    @pycrt.enforce_precision(i="arr")
-    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
-        return self.D.dot(arr)
-
-    @pycrt.enforce_precision(i="arr")
-    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
-        return self.D.conj().transpose().dot(arr)
-
-
-def GeneralisedGraphLaplacian(Graph: pygsp.graphs.Graph, kind: str = 'iterated', **kwargs):
+            self._adj_out *= 0
+        return self._sum_diff_vertex(self.W.row, arr.data * (self.W.data**0.5), self._adj_out) # it's Graph Divergence
+    
+        
+    @nb.jit(parallel=True, forceobj=True)
+    def _sum_diff_vertex(self, row, diff, y):
+        for i in range(len(row)):
+            y[row[i]] += diff[i]
+        return y
+    
+    
+    
+class GraphDivergence(pyca.LinOp):
     r"""
-    Generalised graph Laplacian operator.
+    Graph divergence operator.
+    
+    Bases: ``pycsou.abc.operator.LinOp``
+    
+    Given a graph signal vector :math:`\mathbf{F} \in \mathbf{R}^{N \times N}`, where :math:`N = |\mathcal{V}|`, the graph divergence, :math:`\text{div}_{\mathcal{G}} : \mathbb{R}^{N \times N} \rightarrow \mathbb{R}^N` , is defined as
 
-    Generalised Laplacian operator signals defined on graphs.
-
-    Parameters
-    ----------
-    Graph: `pygsp.graphs.Graph <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph>`_
-        Graph on which the signal is defined, with normalised Laplacian ``Graph.L`` precomputed (see `pygsp.graphs.Graph.compute_laplacian(lap_type='normalized') <https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian>`_.
-    dtype: type
-        Type of the entries of the graph filer.
-    kind: str
-        Type of generalised differential operator (``'iterated'``, ``'sobolev'``, ``'polynomial'``).
-        Depending on the cases, the ``GeneralisedLaplacian`` operator is defined as follows:
-
-        * ``'iterated'``: :math:`\mathscr{D}=\mathbf{L}^N`,
-        * ``'sobolev'``: :math:`\mathscr{D}=(\alpha^2 \mathrm{Id}-\mathbf{L})^N`, with :math:`\alpha\in\mathbb{R}`,
-        * ``'polynomial'``: :math:`\mathscr{D}=\sum_{n=0}^N \alpha_n \mathbf{L}^n`,  with :math:`\{\alpha_0,\ldots,\alpha_N\} \subset\mathbb{R}`,
-
-        where :math:`\mathbf{L}` is the :py:class:`~pycgsp.linop.diff.GraphLaplacian` operator.
-    kwargs: Any
-        Additional arguments depending on the value of ``kind``:
-
-        * ``'iterated'``: ``kwargs={order: int}`` where ``order`` defines the exponent :math:`N`.
-        * ``'sobolev'``: ``kwargs={order: int, constant: float}`` where ``order`` defines the exponent :math:`N` and ``constant`` the scalar :math:`\alpha\in\mathbb{R}`.
-        * ``'polynomial'``: ``kwargs={coeffs: Union[np.ndarray, list, tuple]}`` where ``coeffs`` is an array containing the coefficients :math:`\{\alpha_0,\ldots,\alpha_N\} \subset\mathbb{R}`.
-
-    Raises
-    ------
-    AttributeError
-        If ``Graph.L`` does not exist.
-    NotImplementedError
-        If ``Graph.lap_type`` is 'combinatorial'.
-    NotImplementedError
-        If ``kind`` is not 'iterated', 'sobolev' or 'polynomial'.
-
-    Examples
+    .. math::
+        {(\text{div}_{\mathcal{G}}\mathbf{F})_{i} = \sum_{j \in \mathcal{V}} \sqrt{w_{ij}} \mathbf{F}_{ij}}
+        
+    Adjoint of graph gradient, :math:`\text{div}^*_{\mathcal{G}} : \mathbb{R}^N \rightarrow \mathbb{R}^{N \times N}`, is graph gradient:
+    
+    .. math::
+        {(\text{div}^*_{\mathcal{G}}\mathbf{f})_{ij} = \sqrt{w_{ij}} (\mathbf{f}_i - \mathbf{f}_j)}
+    
+    See Also
     --------
+    ``GraphGradient``
+    """
+    
+    def __init__(self, Graph):
+        r"""
+        Parameters
+        ----------
+        Graph: ``pycgsp.core.Graph`` or ``pygsp.graphs.Graph``
+            Graph object.
+        """
+        self._GraphGrad = GraphGradient(Graph)
+        super().__init__(shape=(Graph.N, Graph.Ne))
+        
 
-    .. plot::
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr) -> pyct.NDArray:#: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: Sparse array
+            Input array.
+            
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output of divergence array
+        """
+        return self._GraphGrad.adjoint(arr)
+    
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray):
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array.
+        
+        Returns
+        -------
+        Sparse.coo_matrix
+            Output of adjoint of divergence array
+        """
+        return self._GraphGrad(arr)
 
-       import numpy as np
-       from pygsp.graphs import Ring
-       from pycgsp.linop.diff import GeneralisedGraphLaplacian
-       np.random.seed(1)
-       G = Ring(N=32, k=4)
-       G.compute_laplacian(lap_type='normalized')
-       G.set_coordinates(kind='spring')
-       x = np.arange(G.N)
-       signal = np.piecewise(x, [x < G.N//3, (x >= G.N//3) * (x< 2 * G.N//3), x>=2 * G.N//3], [lambda x: -x, lambda x: 3 * x - 4 * G.N//3, lambda x: -0.5 * x + G.N])
-       Dop = GeneralisedGraphLaplacian(Graph=G, kind='polynomial', coeffs=[1,-1,2])
-       gen_lap = Dop * signal
-       plt.figure()
-       ax=plt.gca()
-       G.plot_signal(signal, ax=ax, backend='matplotlib')
-       plt.title('Signal')
-       plt.axis('equal')
-       plt.figure()
-       ax=plt.gca()
-       G.plot_signal(gen_lap, ax=ax, backend='matplotlib')
-       plt.title('Generalized Laplacian of signal')
-       plt.axis('equal')
 
+class GraphLaplacian(pyca.SelfAdjointOp):
+    r"""
+    Graph laplacian operator.
+    
+    Bases: ``pycsou.abc.operator.SelfAdjointOp``
+            
+    Given a graph signal :math:`\mathbf{f} \in \mathbf{R}^N`, where :math:`N = |\mathcal{V}|`, the graph laplacian, :math:`L : \mathbb{R}^N \rightarrow \mathbb{R}^N` , is defined as
+    
+    .. math::
+        {(L \mathbf{f})_{i} = \sum_{j \in \mathcal{V}} w_{ij} (\mathbf{f}_i - \mathbf{f}_j)}
 
     Notes
     -----
-    The ``GeneralisedGraphLaplacian`` operator is self-adjoint.
-
-    See Also
+    Graph Laplacian is self adjoint operator.
+    
+    Examples
     --------
-    :py:class:`~pycgsp.linop.diff.GraphLaplacian`
-
-
-    """
-    if Graph.L is None:
-        raise AttributeError(
-            r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
-    elif Graph.lap_type != 'normalized":
-        raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
-    else:
-        L = Graph.L.tocsc()
-        LapOp = pyca.LinOp.from_array(L)
+    
+    .. plot::
+    
+        import pycgsp.linop.diff as pycgspd
+        import pycgsp.core.graph as pycgspg
+        import pycgsp.core.plot as pycgspp
+        import pygsp.graphs as pygspg
+        import matplotlib.pyplot as plt
+        import numpy as np
         
-    if kind == "iterated":
-        N = kwargs['order']
-        Dgen = LapOp ** N
-    elif kind == "sobolev":
-        I = IdentityOp(size=LapOp.shape[0] * LapOp.shape[1])
-        alpha = kwargs['constant']
-        N = kwargs['order']
-        Dgen = ((alpha ** 2) * I - LapOp) ** N
-    elif kind == "polynomial":
-        coeffs = kwargs["coeffs"]
-        Dgen = PolyLinOp(LinOp=LapOp, coeffs=coeffs)
-    else:
-        raise NotImplementedError(
-            'Supported generalised Laplacian types are: iterated, sobolev, polynomial.')
-    return Dgen
+        G2 = pygspg.Minnesota()
+        G1 = pycgspg.Graph(G2.W)
+        G1Lap = pycgspd.GraphLaplacian(G1)
+        G2Lap = pycgspd.GraphLaplacian(G2)
+        vec = np.random.randn(G2.N,)
+        lap_arr_1 = G1Lap(vec)
+        lap_arr_2 = G2Lap(vec)
+        G2.compute_laplacian()
+        lap_arr_pygsp = G2.L.dot(vec)
+        np.allclose(lap_arr_1, lap_arr_2)
+        np.allclose(lap_arr_1, lap_arr_pygsp)
+        fig,ax = plt.subplots(1, 2, figsize=(10,4))
+        pycgspp.myGraphPlotSignal(G2, s=vec, title="Input Signal", ax=ax[0])
+        pycgspp.myGraphPlotSignal(G2, s=lap_arr_1, title="Laplacian of Signal by Pycgsp", ax=ax[1])
+        plt.show()
+    
+    """
+    
+    def __init__(self, Graph, lap_type="combinatorial"):
+        r"""
+        Parameters
+        ----------
+        Graph: ``pycgsp.core.Graph`` or ``pygsp.graphs.Graph``
+            Graph object.
+        lap_type: ``str``
+            Laplacian type. Default: combinatorial.
+        """
+        
+        if lap_type == Graph.lap_type:
+            pass
+            #print("[INFO]: lap_type consistent")
+        else:
+            Graph.compute_laplacian(lap_type=lap_type)
+        
+        self.W = Graph.W
+        self.L = Graph.L.tocoo()
+        self._lap_type = lap_type
+        
+        super().__init__(shape=self.W.shape)
+        
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array.
+            
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output array
+        """
+        if self._lap_type == "combinatorial":
+            xp = pycu.get_array_module(arr)
+            diff = arr[self.L.row] - arr[self.L.col]
+            weighted_diff = diff * self.W[self.L.row, self.L.col].toarray()[0]
+            return self._sum_diff_vertex(self.L.row, weighted_diff, xp.zeros_like(arr))
+        else:
+            raise NotImplementedError("Matrix-free Normalized Laplacian Implementation not supported yet")
+    
+    @nb.jit(parallel=True, forceobj=True)
+    def _sum_diff_vertex(self, row, diff, y):
+        for i in range(len(row)):
+            y[row[i]] += diff[i]
+        return y
+
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array.
+            
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output array
+        """
+        return self(arr) # since it's self-adjoint
+    
+
+class GraphHessian(pyca.LinOp):
+    r"""
+    Graph hessian operator.
+    
+    Bases: ``pycsou.abc.operator.LinOp``
+    
+    TODO: Solve this.
+    """
+    
+    def __init__(self, Graph):
+        
+        self.W_lil = Graph.W
+        self.W = Graph.W.tocoo()
+        self._N = Graph.N
+        
+        super().__init__(shape=(Graph.Ne*Graph.Ne, Graph.N))
+        
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        """
+        xp = pycu.get_array_module(arr)
+        # List of sparse matrices
+        H = self._sum_diff_vertex(arr, self._N, self.W.row, self.W.col, [], xp)
+        return self._out
+
+    @nb.jit(parallel=True, forceobj=True)
+    def _sum_diff_vertex(self, arr, N, row, col, H, xp):
+        for i in range(N):
+            sub_col = col[row==i]
+            sub_col_x, sub_col_y = xp.meshgrid(sub_col, sub_col)
+            sub_col_x = xp.ravel(sub_col_x)
+            sub_col_y = xp.ravel(sub_col_y)
+            H.append(((arr[i] - arr[sub_col_x]) * self.W_lil()[i,sub_col_x] + (arr[row[i]] - arr[sub_col_y]) * self.W_lil()[i,sub_col_y])/2)
+        return H
+
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr):#: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        """
+        raise NotImplementedError("Adjoint of Graph Hessian Not Supported!")
