@@ -11,7 +11,6 @@ Overview of Pycgsp's API.
    operators/index
    functionals/index
    algorithms/index
-   math/index
 
 .. rubric:: Graphs
 
@@ -25,3 +24,10 @@ Overview of Pycgsp's API.
 
    pycgsp.linop.conv
    pycgsp.linop.diff
+   pycgsp.linop.fourier
+   
+.. rubric:: Functionals
+
+.. autosummary::
+
+   pycgsp.func.smoothness

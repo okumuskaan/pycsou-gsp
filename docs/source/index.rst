@@ -18,14 +18,14 @@ Check out the :doc:`installation` section for further information to
     import matplotlib.pyplot as plt
     G = graphs.Minnesota()
     signal = np.random.randn(G.N,)
-    Lap = diff.GraphLaplacian(G)
-    lap_sig = Lap(signal)
-    lap_sig_pygsp = G.L.dot(signal)
-    fig, ax = plt.subplots(1, 3, figsize=(20,8))
-    plot.myGraphPlotSignal(G, s = signal, title="Input Signal", ax = ax[0])
-    plot.myGraphPlotSignal(G, s = lap_sig, title="Laplacian of Signal by Pycsou-GSP", ax = ax[1])
-    plot.myGraphPlotSignal(G, s = lap_sig_pygsp, title="Laplacian of Signal by PyGSP", ax = ax[2])
-    plt.show()
+    #Lap = diff.GraphLaplacian(G)
+    #lap_sig = Lap(signal)
+    #lap_sig_pygsp = G.L.dot(signal)
+    #fig, ax = plt.subplots(1, 3, figsize=(20,8))
+    #plot.myGraphPlotSignal(G, s = signal, title="Input Signal", ax = ax[0])
+    #plot.myGraphPlotSignal(G, s = lap_sig, title="Laplacian of Signal by Pycsou-GSP", ax = ax[1])
+    #plot.myGraphPlotSignal(G, s = lap_sig_pygsp, title="Laplacian of Signal by PyGSP", ax = ax[2])
+    #plt.show()
    
 
 .. toctree::

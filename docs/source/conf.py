@@ -30,6 +30,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.todo',
     'sphinx.ext.napoleon',
+    'sphinx_togglebutton',
 ]
 
 templates_path = ['_templates']

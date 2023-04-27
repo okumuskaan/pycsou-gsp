@@ -10,3 +10,4 @@ Linear Operators Module: `pycgsp.linop`
 
    pycgsp.linop.conv
    pycgsp.linop.diff
+   pycgsp.linop.fourier

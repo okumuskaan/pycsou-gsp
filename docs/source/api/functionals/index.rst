@@ -1,4 +1,9 @@
 Functionals
 ===========
 
-Overview of Pycgsp's API.
+Functionals Module: `pycgsp.func`
+
+.. autosummary::
+   :toctree:
+
+   pycgsp.func.smoothness
