@@ -61,9 +61,6 @@ class Graph:
         self._e = None
         self._coherence = None
         self._D = None
-        self._LapOp = None      # Pycsou LinOp - SelfAdjointOp
-        self._GradOp = None
-        self._DivOp = None
                 
         self.lap_type = lap_type
         self.compute_laplacian(lap_type)
@@ -102,26 +99,21 @@ class Graph:
             self._dw = np.ravel(self.W.sum(axis=0))
         return self._dw
         
-    @property
-    def LapOp(self):
-        if self._LapOp is None:
-            print("Creating GraphLaplacian Object...")
-            self._LapOp = GraphLaplacian(Graph=self, lap_type=self.lap_type)
-        return self._LapOp
         
     @property
-    def GradOp(self):
-        if self._GradOp is None:
-            print("Creating GraphGradient Object...")
-            self._GradOp = GraphGradient(Graph=self)
-        return self._GradOp
+    def e(self):
+        if self._e is None:
+            self._e = self.LapOp.eigvals(self.N) # TODO: Solve this!
+        return self._e
         
     @property
-    def DivOp(self):
-        if self._DivOp is None:
-            print("Creating GraphDivergence Object...")
-            self._DivOp = GraphDivergence(Graph=self)
-        return self._DivOp
+    def lmax(self):
+        if self._lmax is None:
+            if self.L is None:
+                self.compute_laplacian(self.lap_type)
+            self._lmax, _ = sparse.linalg.eigsh(self.L, k=1)
+            self._lmax = self._lmax[-1]
+        return self._lmax
         
     
     def compute_laplacian(self, lap_type='combinatorial'):
@@ -131,7 +123,6 @@ class Graph:
             self._e = None
             self._coherence = None
             self._D = None
-            self._LapOp = None
         
         self.lap_type = lap_type
         
@@ -151,29 +142,4 @@ class Graph:
             self.L.eliminate_zeros()
         else:
             raise ValueError("Unknown Laplacian type {}".format(lap_type))
-
-        
-    @pycrt.enforce_precision(i="arr")
-    def laplacian_op(self, arr, lap_type="combinatorial"):
-        if lap_type != self.lap_type:
-            self._lmax = None
-            self._U = None
-            self._e = None
-            self._coherence = None
-            self._D = None
-            self._LapOp = None
-        
-        self.lap_type = lap_type
-        
-        return self.LapOp(arr)
-        
-    
-    @pycrt.enforce_precision(i="arr")
-    def grad_op(self, arr):
-        return self.GradOp(arr)
-            
-    @pycrt.enforce_precision(i="arr")
-    def div_op(self, arr):
-        return self.DivOp(arr)
-
 
