@@ -17,8 +17,9 @@ import pycsou.util as pycu
 import pycsou.util.ptype as pyct
 import pycgsp.util as pycgspu
 import pygsp
+from scipy.linalg import eigh
 
-class PolyLinOp(pyca.LinOp):
+class _PolyLinOp(pyca.LinOp):
     r"""
     Polynomial Linear Operator :math:`P(L)`.
     
@@ -77,10 +78,10 @@ class PolyLinOp(pyca.LinOp):
         self.LinOp = LinOp
         self.coeffs = coeffs
         self._N = len(self.coeffs)
-        if method!="chebyhev" or method!="exact":
+        if method!="chebyshev" and method!="exact":
             raise ValueError("Method should be either 'exact' or 'chebyshev'.")
         self._method = method
-        super(PolyLinOp, self).__init__(shape=LinOp.shape)
+        super(_PolyLinOp, self).__init__(shape=LinOp.shape)
         #self._lipschitz = ...
         
     @pycrt.enforce_precision(i="arr")
@@ -134,7 +135,7 @@ class PolyLinOp(pyca.LinOp):
             # Chebyshev method
             raise NotImplementedError("Chebyshev Method Not Supported Yet")
 
-class GraphConvolution(PolyLinOp):
+class GraphConvolution(pyca.LinOp):
     r"""
     Graph Convolution Operator.
 
@@ -159,27 +160,114 @@ class GraphConvolution(PolyLinOp):
     where :math:`\theta \in \mathbb{R}^K` is a vector of polynomial coefficients. Then, :math:`(g_\theta(L))_{ij} = \sum_k \theta_k (L^k)_{ij}`.
     
     
-    TODO: Add kernel input to implement chebyshev approximation
-
     """
 
-    def __init__(self, Graph, coefficients: pyct.NDArray, method: str = "chebyshev"):
+    def __init__(self, L, lmax=None, U=None, kernel=None, e=None, coeffs=None, order: int =30, method: str = "chebyshev"):
         r"""
         Parameters
         ----------
-        Graph: (``pycgsp.core.graph.Graph``, ``pygsp.graphs.Graph``)
-            Graph object.
-        coefficients: ``pyct.NDArray``
-            Coefficients of graph convolution.
+        L: Sparse Array
+            Graph weighted adjacency matrix.
+        kernel: func
+            Kernel function.
+        e: NDArray
+            Eigenvalues
+        coeffs: ``pyct.NDArray``
+            Polynomial coefficients of graph convolution.
         method: ``str``
-            Method to compute graph convolution, either ``exact`` or ``chebyshev``.
+            Method to compute graph convolution, either ``exact``, ``chebyshev`` or ``poly_linop``.
         """
-        if Graph.L is None:
-            raise AttributeError(r'Please compute the normalised Laplacian of the graph with the routine https://pygsp.readthedocs.io/en/stable/reference/graphs.html#pygsp.graphs.Graph.compute_laplacian')
-        elif Graph.lap_type != 'normalized':
-            raise NotImplementedError(r'Combinatorial graph Laplacians are not supported.')
-        else:
-            L = self.Graph.L.tocsc()
+        
+        self._N = L.shape[0]
+        self.Nf = 1
+        
+        
+        L = L.tocsc()
+            
+        self._method = method
+        self._order = order
+        self._lmax = lmax
+        self._kernel = kernel
+        self._e = e
+        
+        if method == "poly_linop":
             Lop = pyca.LinOp.from_array(L)
-        super(GraphConvolution, self).__init__(LinOp=Lop, coeffs=coefficients, method=method)
+            if coeffs is not None:
+                _coeffs = coeffs
+            elif e is not None and kernel is not None:
+                _coeffs = kernel(e)
+            else:
+                raise ValueError("Either coeffs or kernel with eigenvalues must be given")
+            self._PolyLinOp = _PolyLinOp(LinOp=Lop, coeffs=_coeffs, method="exact")
+        else:
+            self._L  = L
+            if method == "exact":
+                if U is None or e is None:
+                    raise ValueError("U and e must be given for exact method")
+                self._U = U
+            
+        super(GraphConvolution, self).__init__(shape=(self._N, self._N))
+        
+    @pycrt.enforce_precision(i="arr")
+    def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array
+        
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output array
+        """
+        # TODO: Make it work for #signals more than 1 and #features more than 1
+        if arr.ndim==1:
+            arr = arr.reshape(arr.shape+(1,1))
+        elif arr.ndim==2:
+            arr = arr.reshape(arr.shape+(1,))
+        assert arr.ndim == 3 # (#nodes, #signals, #features)
+        
+        if self._method == "poly_linop":
+            return self._PolyLinOp.apply(arr[:,0,0])
+            
+        elif self._method == "chebyshev":
+            xp = pycu.get_array_module(arr)
+            c = pycgspu.compute_cheby_coeff(xp, self._kernel, self._lmax, m=self._order)
+            arr = arr.squeeze(axis=2)
+            arr = pycgspu.cheby_op(xp, self._L, self._N, self._lmax, c, arr)
+            arr = arr.reshape((self._N, 1, 1), order='F')
+            arr = arr.swapaxes(1,2)
+            return arr.squeeze()
+            
+        elif self._method == "exact":
+            
+            if self._U is not None:
+                g = self._kernel(self._e)
+                arr = self._U.T.dot(arr[:,0,0])
+                arr = g*arr
+                return self._U.dot(arr)
+                
+            #raise NotImplementedError("Exact Not Supported Yet")
+
+            
+    @pycrt.enforce_precision(i="arr")
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
+        r"""
+        Parameters
+        ----------
+        arr: ``pyct.NDArray``
+            Input array
+        
+        Returns
+        -------
+        ``pyct.NDArray``
+            Output array
+        """
+        if self._method == "poly_linop":
+            return self._PolyLinOp.adjoint(arr)
+
+        else:
+            # Chebyshev method
+            raise NotImplementedError("Chebyshev Method Not Supported Yet")
 
