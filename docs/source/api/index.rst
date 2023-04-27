@@ -1,0 +1,33 @@
+Pycgsp API
+##########
+
+Overview of Pycgsp's API.
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+
+   graphs/index
+   operators/index
+   functionals/index
+   algorithms/index
+
+.. rubric:: Graphs
+
+.. autosummary::
+
+   pycgsp.core.graph
+
+.. rubric:: Operators
+
+.. autosummary::
+
+   pycgsp.operator.linop.conv
+   pycgsp.operator.linop.diff
+   pycgsp.operator.linop.fourier
+   
+.. rubric:: Functionals
+
+.. autosummary::
+
+   pycgsp.operator.func.smoothness
