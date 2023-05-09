@@ -16,7 +16,7 @@ import pycsou.util as pycu
 import pycsou.util.ptype as pyct
 import pycgsp.util as pycgspu
 import pygsp
-from scipy.linalg import eigh
+
 
 class _PolyLinOp(pyca.LinOp):
     r"""
@@ -63,7 +63,7 @@ class _PolyLinOp(pyca.LinOp):
     
     """
     
-    def __init__(self, LinOp: pyca.LinOp, coeffs: pyct.NDArray, method="exact"):
+    def __init__(self, LinOp: pyca.LinOp, coeffs: pyct.NDArray):
         r"""
         Parameters
         ----------
@@ -74,12 +74,9 @@ class _PolyLinOp(pyca.LinOp):
         method: str
             Method to implement polynomial linear operator, either ``exact`` or ``chebyshev``. Default: ``exact``.
         """
-        self.LinOp = LinOp
-        self.coeffs = coeffs
-        self._N = len(self.coeffs)
-        if method!="chebyshev" and method!="exact":
-            raise ValueError("Method should be either 'exact' or 'chebyshev'.")
-        self._method = method
+        self._LinOp = LinOp
+        self._coeffs = coeffs
+        self._N = len(coeffs)
         super(_PolyLinOp, self).__init__(shape=LinOp.shape)
         #self._lipschitz = ...
         
@@ -96,17 +93,12 @@ class _PolyLinOp(pyca.LinOp):
         ``pyct.NDArray``
             Output array
         """
-        if self._method == "exact":
-            y = self.coeffs[0] * arr
-            z = arr
-            for i in range(1, len(self.coeffs)):
-                z = self.LinOp(z)
-                y += self.coeffs[i] * z
-            return y
-        else:
-            # Chebyshev method
-            raise NotImplementedError("Chebyshev Method Not Supported Yet")
-            c = pycgspu.compute_cheby_coeff(self, m=self._N-1)
+        y = self._coeffs[0] * arr
+        z = arr
+        for i in range(1, self._N):
+            z = self._LinOp(z)
+            y += self._coeffs[i] * z
+        return y
 
             
     @pycrt.enforce_precision(i="arr")
@@ -123,16 +115,12 @@ class _PolyLinOp(pyca.LinOp):
             Output array
         """
         xp = pycu.get_array_module(arr)
-        if self._method == "exact":
-            z = arr
-            y = xp.conj(self.coeffs[0]) * arr
-            for i in range(1, len(self.coeffs)):
-                z = self.LinOp.adjoint(z)
-                y += xp.conj(self.coeffs[i]) * z
-            return y
-        else:
-            # Chebyshev method
-            raise NotImplementedError("Chebyshev Method Not Supported Yet")
+        z = arr
+        y = xp.conj(self._coeffs[0]) * arr
+        for i in range(1, self._N):
+            z = self._LinOp.adjoint(z)
+            y += xp.conj(self._coeffs[i]) * z
+        return y
 
 class GraphConvolution(pyca.LinOp):
     r"""
@@ -161,7 +149,17 @@ class GraphConvolution(pyca.LinOp):
     
     """
 
-    def __init__(self, L, lmax=None, U=None, kernel=None, e=None, coeffs=None, order: int =30, method: str = "chebyshev"):
+    def __init__(
+        self,
+        L: pyct.SparseArray,
+        lmax=None,
+        U=None,
+        kernel=None,
+        e=None,
+        coeffs=None,
+        order: int =30,
+        method: str = "chebyshev"
+    ):
         r"""
         Parameters
         ----------
@@ -181,7 +179,11 @@ class GraphConvolution(pyca.LinOp):
         self.Nf = 1
         
         
-        L = L.tocsc()
+        spi = pycd.SparseArrayInfo.from_obj(L)
+        if (spi == pycd.SparseArrayInfo.SCIPY_SPARSE) or (spi == pycd.SparseArrayInfo.CUPY_SPARSE):
+            L = L.tocsc()
+        else:
+            raise NotImplementedError
             
         self._method = method
         self._order = order
