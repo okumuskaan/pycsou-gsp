@@ -15,8 +15,11 @@ This module provides various graph differential operators that are based on ``py
 """
 
 import typing as typ
+import warnings
 
-import numba as nb
+import numpy as np
+
+import pycgsp.util as pycgspu
 
 import pycsou.abc as pyca
 import pycsou.util as pycu
@@ -30,148 +33,15 @@ __all__ = [
     "GraphLaplacian",
 ]
 
-def _sparse_to_rcd(arr):
-    spi = pycd.SparseArrayInfo.from_obj(arr)
-    if (spi == pycd.SparseArrayInfo.SCIPY_SPARSE) or (spi == pycd.SparseArrayInfo.CUPY_SPARSE):
-        sp = spi.module()
-        if not sp.isspmatrix_coo(arr):
-            arr = arr.tocoo()
-        row = arr.row
-        col = arr.col
-        data = arr.data
-    elif (spi == pycd.SparseArrayInfo.PYDATA_SPARSE):
-        arr.asformat("coo")
-        row, col = arr.coords
-        data = arr.data
-    else:
-        raise ValueError("Unknown input for sparse array.")
-    return (row, col, data)
-    
-    
-    
-class _GraphOpBase(object):
-    """
-    Base Class for converting adjecency matrix W to row, col and data arrays that are module-agnostic according to sample_arr and input array of apply and adjoint.
-    
-    Notes
-    -----
-    Inside the init constructor, call ``_convert_W_to_rcd`` and get rcd: W --> (wrow, wcol, wdata) data. W can be either array of NumPy, DaskArray, CuPy or sparse array of SciPy Sparse, PyData Sparse, Cupy Sparse.
-    
-    Then, inside the init constructor, call ``_init_update_rcd`` method to convert rcd arrays to modules according to input sample_arr.
-    
-    Call ``_apply_update_rcd`` method to convert rcd arrays to modules according to input array of apply or adjoint function. If the modules are equivalent to the stored rcd array's module, then nothing is done.
-    
-    
-    """
-
-    # Input is W, weighted adjacency matrix.
-    
-    def _convert_W_to_rcd(self, W):
-        """
-        Converts weighted adjacency matrix to row, col, data arrays.
-        
-        If the matrix is sparse array, then _sparse_to_rcd is called
-        If the matrix is array, then nonzero method and accessing is applied
-        As a result, (wrow, wcol, wdata) is returned.
-        
-        """
-        if (type(W) in pycd.supported_array_types()):
-            _wrow, _wcol = W.nonzero()
-            _wdata = W[_wrow, _wcol]
-        else:
-            _wrow, _wcol, _wdata = _sparse_to_rcd(W)
-            
-        return (_wrow, _wcol, _wdata)
-            
-    
-    def _init_update_rcd(self, sample_arr):
-        """
-        Converts the modules of arrays wrow, wcol, wdata same as that of module input sample array
-        
-        This should be called inside the init.
-        
-        """
-        self._Ninfo = pycd.NDArrayInfo
-        if sample_arr is not None:
-            ndo = self._Ninfo.from_obj(sample_arr)
-            self._update_rcd(ndo)
-        else:
-            self._backup = None # Data stored in NUMPY
-            
-    def _apply_update_rcd(self, x):
-        """
-        Checks if the module of input array of apply or adjoint function is equal to the stored arrays. If not, update row, col, data
-        """
-        ndo = self._Ninfo.from_obj(x)
-        print(ndo)
-        if (ndo != self._backup):
-            print("IF YES")
-            self._update_rcd(ndo)
-        else:
-            print("IF NO")
-
-    def _update_rcd(self, ndo):
-        """
-        Convert the arrays (wrow, wcol, wdata) to the module of input array
-        """
-        if ndo == self._Ninfo.DASK:
-            # Convert (wrow, wcol, wdata) to dask array
-            # CUPY --> DASK and NUMPY --> DASK
-            xp = ndo.module()
-            if self._backup == self._Ninfo.CUPY:
-                # Extra operation for CUPY --> DASK
-                self._wrow = self._wrow.get()
-                self._wcol = self._wcol.get()
-                self._wdata = self._wdata.get()
-            self._wrow = xp.from_array(self._wrow)
-            self._wcol = xp.from_array(self._wcol)
-            self._wdata = xp.from_array(self._wdata)
-            self._backup = self._Ninfo.DASK
-                
-        elif ndo == self._Ninfo.CUPY:
-            # Convert (wrow, wcol, wdata) to cupy array
-            # NUMPY --> CUPY and DASK --> CUPY
-            xp = ndo.module()
-            if self._backup == self._Ninfo.DASK:
-                # Extra operation for DASK --> CUPY
-                self._wrow = self._wrow.compute()
-                self._wcol = self._wcol.compute()
-                self._wdata = self._wdata.compute()
-            self._wrow = xp.array(self._wrow)
-            self._wcol = xp.array(self._wcol)
-            self._wdata = xp.array(self._wdata)
-            self._backup = self._Ninfo.CUPY
-
-        elif ndo == self._Ninfo.NUMPY:
-            # Convert (wrow, wcol, wdata) to numpy array
-            if self._backup == None:
-                # None is NUMPY --> NUMPY
-                pass
-            else:
-                # DASK --> NUMPY and CUPY --> NUMPY
-                if self._backup == self._Ninfo.DASK:
-                    # DASK --> NUMPY
-                    self._wrow = self._wrow.compute()
-                    self._wcol = self._wcol.compute()
-                    self._wdata = self._wdata.compute()
-                elif self._backup == self._Ninfo.CUPY:
-                    # CUPY --> NUMPY
-                    self._wrow = self._wrow.get()
-                    self._wcol = self._wcol.get()
-                    self._wdata = self._wdata.get()
-                self._backup = self._Ninfo.NUMPY
-
-        else:
-            raise ValueError("Unknown type of sample array")
-        
-    
     
 
-class GraphGradient(pyca.LinOp, _GraphOpBase):
+class GraphGradient(pyca.LinOp):
     r"""
     Graph gradient operator.
     
     Bases: ``pycsou.abc.operator.LinOp``
+    
+    **Mathematical Notes**
     
     Given a graph signal :math:`\mathbf{f} \in \mathbb{R}^N`, where :math:`N = |\mathcal{V}|`, the graph gradient, :math:`\nabla : \mathbb{R}^N \rightarrow \mathbb{R}^{N_e}` , is defined as
     
@@ -184,10 +54,18 @@ class GraphGradient(pyca.LinOp, _GraphOpBase):
     
     .. math::
         {(\nabla^*\mathbf{F})_i = \sum_{j \in \mathcal{V}} 2 \sqrt{w_{ij}} \mathbf{F}_{ij}}
+        
+    **Implementation Notes**
+    
+    The instances are not arraymodule-agnostic: they will only work with NDArrays belonging to the same array module as attributes of sparse arrays of ``W``.
+        If W is cupy.sparse, the backend arraymodule is CUPY.
+        If W is either sparse or scipy.sparse, the backend arraymodule is NUMPY
+    
+    In apply and adjoint operator, the module of the input array is expected to be equal to backend arraymodule. If not, warning is given, and non-efficient conversion is applied to make it module agnostic.
     
     Examples
     --------
-    >>> import pycgsp.linop.diff as pycgspd
+    >>> import pycgsp.operator.linop.diff as pycgspd
     >>> import pycgsp.core.graph as pycgspg
     >>> import pycgsp.core.plot as pycgspp
     >>> import pygsp.graphs as pygspg
@@ -214,30 +92,57 @@ class GraphGradient(pyca.LinOp, _GraphOpBase):
     """
     
     
-    def __init__(self, W: typ.Union[pyct.NDArray, pyct.SparseArray],
-                 sample_arr: typ.Optional[pyct.NDArray] = None):
+    def __init__(
+        self,
+        W: typ.Union[pyct.NDArray, pyct.SparseArray],
+        enable_warnings: bool = True
+    ):
         r"""
         Parameters
         ----------
         W: ``pyct.NDArray`` or ``pyct.SparseArray``
-            Weighted adjacency matrix of a graph.
-        sample_arr: ``pyct.NDArray`` or ``None``
-            Optional sample input array to convert data module. Default: ``None``.
+            Weight matrix of a graph.
+        enable_warnings: ``bool``
+            Boolean data that determines if warnings about the compatibility of input array with backend are created or not. Default: ``True``.
         """
         
-        self._wrow, self._wcol, self._wdata = self._convert_W_to_rcd(W)
-        self._backup = None
+        self._wrow, self._wcol, self._wdata = pycgspu.canonical_repr(W)
         
         self._N = W.shape[0]
         self._Ne = len(self._wdata)
-        
-        self._init_update_rcd(sample_arr) # self._backup and self._wrow, self._wcol, self._data updated
-        
         super().__init__(shape=(self._Ne , self._N))
+                
+        self._dtype = self._wdata[0].dtype
+        self._arraymodule = pycd.NDArrayInfo.from_obj(self._wdata)
+        self._enable_warnings = bool(enable_warnings)
         
+        self._compute_div = self._create_div_func(self._arraymodule)
         #self._lipschitz = ...
         
-    
+    @staticmethod
+    def _create_div_func(ndi):
+        if (ndi == pycd.NDArrayInfo.NUMPY):
+            _code = r"""
+import numba as nb
+
+@nb.jit(nopython=True, fastmath=True)
+def div_jit(rows, ws, arr, res):
+    for i, row in enumerate(rows):
+        res[row] += (ws[i]**0.5) * arr[i]
+    return res
+"""
+        elif (ndi == pycd.NDArrayInfo.CUPY):
+            _code = r"""
+import numba.cuda as nbcuda
+
+@nbcuda.jit(device=True, fastmath=True, opt=True)
+def div_jit(rows, ws, arr, res):
+    for i, row in enumerate(rows):
+        res[row] += (ws[i]**0.5) * arr[i]
+    return res
+"""
+        exec(_code, locals())
+        return eval("div_jit")
     
     @pycrt.enforce_precision(i="arr")
     def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
@@ -252,12 +157,13 @@ class GraphGradient(pyca.LinOp, _GraphOpBase):
         ``pyct.NDArray``
             Output of gradient array with :math:`N_e` elements.
         """
-        self._apply_update_rcd(arr)
-        diff = arr[self._wrow] - arr[self._wcol]
-        return diff * (self._wdata**0.5)
+        ndi = pycd.NDArrayInfo.from_obj(arr)
+        arr = pycgspu.cast_warn(arr, self._dtype, ndi, self._arraymodule, self._enable_warnings)
+        res = (arr[self._wrow] - arr[self._wcol]) * (self._wdata**0.5)
+        return pycgspu.convert_arr(res, self._arraymodule, ndi)
 
     @pycrt.enforce_precision(i="arr")
-    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:#: pyct.NDArray) -> pyct.NDArray:
+    def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
         r"""
         Parameters
         ----------
@@ -269,19 +175,27 @@ class GraphGradient(pyca.LinOp, _GraphOpBase):
         ``pyct.NDArray``
             Output of adjoint of gradient array with `N` elements.
         """
-        self._apply_update_rcd(arr)
-        xp = pycu.get_array_module(arr)
-        y = xp.zeros((self._N,))
-        return self._sum_diff_vertex(self._wrow, arr * 2 * (self._wdata**0.5), y) # it's Graph Divergence
-    
+        ndi = pycd.NDArrayInfo.from_obj(arr)
+        arr = pycgspu.cast_warn(arr, self._dtype, ndi, self._arraymodule, self._enable_warnings)
+        res = self._compute_div(self._wrow, self._wdata, arr, arr*0.0)
+        return pycgspu.convert_arr(res, self._arraymodule, ndi)
+
+
+            
         
-    @staticmethod
-    @nb.jit(parallel=True, nopython=True)
-    def _sum_diff_vertex(row, diff, y):
-        for i in range(row.shape[0]):
-            y[row[i]] += diff[i]
-        return y
     
+
+
+
+
+
+
+
+
+
+
+
+
     
     
 class GraphDivergence(pyca.LinOp):
@@ -290,23 +204,36 @@ class GraphDivergence(pyca.LinOp):
     
     Bases: ``pycsou.abc.operator.LinOp``
     
+    **Mathematical Notes**
+    
     Given a graph signal vector :math:`\mathbf{F} \in \mathbf{R}^{N_e}`, where :math:`N_e = |\mathcal{E}|`, the graph divergence, :math:`\text{div} : \mathbb{R}^{N_e} \rightarrow \mathbb{R}^N` , is defined as
 
     .. math::
-        {(\text{div} \mathbf{F})_{i} = \sum_{j \in \mathcal{V}} 2\sqrt{w_{ij}} \mathbf{F}_{ij}}
+        {(\text{div} \mathbf{F})_{i} = \sum_{j \in \mathcal{V}} \sqrt{w_{ij}} \mathbf{F}_{ij}}
         
     Adjoint of graph divergence, :math:`\text{div}^* : \mathbb{R}^N \rightarrow \mathbb{R}^{N_e}`, is graph gradient:
     
     .. math::
         {(\text{div}^* \mathbf{f})_{ij} = \sqrt{w_{ij}} (\mathbf{f}_i - \mathbf{f}_j)}
     
+    **Implementation Notes**
+    
+    The instances are not arraymodule-agnostic: they will only work with NDArrays belonging to the same array module as attributes of sparse arrays of ``W``.
+        If W is cupy.sparse, the backend arraymodule is CUPY.
+        If W is either sparse or scipy.sparse, the backend arraymodule is NUMPY
+    
+    In apply and adjoint operator, the module of the input array is expected to be equal to backend arraymodule. If not, warning is given, and non-efficient conversion is applied to make it module agnostic.
+    
     See Also
     --------
     ``GraphGradient``
     """
     
-    def __init__(self, W: typ.Union[pyct.NDArray, pyct.SparseArray],
-                 sample_arr: typ.Optional[pyct.NDArray] = None):
+    def __init__(
+        self,
+        W: typ.Union[pyct.NDArray, pyct.SparseArray],
+        enable_warnings: bool = True
+    ):
         r"""
         Parameters
         ----------
@@ -315,7 +242,7 @@ class GraphDivergence(pyca.LinOp):
         sample_arr: ``pyct.NDArray`` or ``None``
             Optional sample input array to convert data module. Default: ``None``.
         """
-        self._GraphGrad = GraphGradient(W, sample_arr)
+        self._GraphGrad = GraphGradient(W, enable_warnings)
         super().__init__(shape=(self._GraphGrad._N, self._GraphGrad._Ne))
         #self._lipschitz = ...
         
@@ -351,16 +278,33 @@ class GraphDivergence(pyca.LinOp):
         return self._GraphGrad(arr)
 
 
-class GraphLaplacian(pyca.SelfAdjointOp, _GraphOpBase):
+class GraphLaplacian(pyca.SelfAdjointOp):
     r"""
     Graph laplacian operator.
     
     Bases: ``pycsou.abc.operator.SelfAdjointOp``
             
-    Given a graph signal :math:`\mathbf{f} \in \mathbf{R}^N`, where :math:`N = |\mathcal{V}|`, the graph laplacian, :math:`L : \mathbb{R}^N \rightarrow \mathbb{R}^N` , is defined as
+    **Mathematical Notes**
+    
+    Given a graph signal :math:`\mathbf{f} \in \mathbf{R}^N`, where :math:`N = |\mathcal{V}|`, the combinatorial graph laplacian, :math:`L : \mathbb{R}^N \rightarrow \mathbb{R}^N` , is defined as
     
     .. math::
         {(L \mathbf{f})_{i} = \sum_{j \in \mathcal{V}} w_{ij} (\mathbf{f}_i - \mathbf{f}_j)}
+        
+    Normalized graph laplacian, :math:`\tilde{L}` is defined as
+    
+    .. math::
+        {(\tilde{L} \mathbf{f})_{i} = \frac{1}{\sqrt{d_i}} \sum_{j \in \mathcal{V}} w_{ij} (\frac{\mathbf{f}_i}{\sqrt{d_i}} - \frac{\mathbf{f}_j}{\sqrt{d_j}})}
+    
+    where :math:`d_i = \sum_{j \in \mathcal{V}} w_{ij}` is the degree of vertex :math:`i`.
+
+    **Implementation Notes**
+    
+    The instances are not arraymodule-agnostic: they will only work with NDArrays belonging to the same array module as attributes of sparse arrays of ``W``.
+        If W is cupy.sparse, the backend arraymodule is CUPY.
+        If W is either sparse or scipy.sparse, the backend arraymodule is NUMPY
+    
+    In apply and adjoint operator, the module of the input array is expected to be equal to backend arraymodule. If not, warning is given, and non-efficient conversion is applied to make it module agnostic.
 
     Notes
     -----
@@ -396,9 +340,12 @@ class GraphLaplacian(pyca.SelfAdjointOp, _GraphOpBase):
     
     """
     
-    def __init__(self, W: typ.Union[pyct.NDArray, pyct.SparseArray],
-                 lap_type="combinatorial",
-                 sample_arr: typ.Optional[pyct.NDArray] = None):
+    def __init__(
+        self,
+        W: typ.Union[pyct.NDArray, pyct.SparseArray],
+        lap_type="combinatorial",
+        enable_warnings: bool = True
+    ):
         r"""
         Parameters
         ----------
@@ -406,21 +353,82 @@ class GraphLaplacian(pyca.SelfAdjointOp, _GraphOpBase):
             Weighted adjacency matrix of a graph.
         lap_type: ``str``
             Laplacian type. Default: combinatorial.
-        sample_arr: ``pyct.NDArray`` or ``None``
-            Optional sample input array to convert data module. Default: ``None``.
-            
-        TODO: Degree Matrix Needed for Normalized Laplacian or It can be computed here
+        enable_warnings: ``bool``
+            Boolean data that determines if warnings about the compatibility of input array with backend are created or not. Default: ``True``.
         """
         
-        self._wrow, self._wcol, self._wdata = self._convert_W_to_rcd(W)
+        self._wrow, self._wcol, self._wdata = pycgspu.canonical_repr(W)
         
         self._N = W.shape[0]
+        super().__init__(shape=(self._N , self._N))
         
-        self._lap_type = lap_type
+        self._dtype = self._wdata[0].dtype
+        self._arraymodule = pycd.NDArrayInfo.from_obj(self._wdata)
+        self._enable_warnings = bool(enable_warnings)
         
-        self._init_update_rcd(sample_arr) # self._backup and self._wrow, self._wcol, self._data updated
+        self._lapd = self._create_lapd(self._arraymodule, self._wrow, self._wdata, lap_type)
+        #self._lap_type = lap_type
         
-        super().__init__(shape=self.W.shape)
+        self._compute_lap = self._create_lap_func(self._arraymodule)
+        # self._lipschitz = ...
+    
+    @staticmethod
+    def _create_lapd(ndi, wrow, wdata, lap_type):
+        if lap_type == "combinatorial":
+            xp = ndi.module()
+            res = xp.ones(len(wdata), dtype=wdata[0].dtype)
+        elif lap_type == "normalized":
+            if ndi == pycd.NDArrayInfo.NUMPY:
+                _code = r"""
+import numba as nb
+
+@nb.jit(nopython=True, fastmath=True)
+def deg_jit(rows, ws, res):
+    for i, row in enumerate(rows):
+        res[row] += ws[i]
+    return res**(-0.5)
+"""
+            elif ndi == pycd.NDArrayInfo.CUPY:
+                _code = r"""
+import numba as nb
+
+@nb.jit(nopython=True, fastmath=True)
+def deg_jit(rows, ws, res):
+    for i, row in enumerate(rows):
+        res[row] += ws[i]
+    return res**(-0.5)
+"""
+            exec(_code, locals())
+            lap = eval("lap_jit")
+            res = lap(wrow, wdata, wdata*0.0)
+        else:
+            raise ValueError("Unknown lap_type. Either combinatorial or normalized must be given.")
+        return res
+    
+    @staticmethod
+    def _create_lap_func(ndi):
+        if ndi == pycd.NDArrayInfo.NUMPY:
+            _code = r"""
+import numba as nb
+
+@nb.jit(nopython=True, fastmath=True)
+def lap_jit(rows, cols, ws, arr, res, d):
+    for i, row in enumerate(rows):
+        res[row] += d[row] * ws[i] * (d[row]*arr[row] - d[cols[i]]*arr[cols[i]])
+    return res
+"""
+        elif ndi == pycd.NDArrayInfo.CUPY:
+            _code = r"""
+import numba.cuda as nbcuda
+
+@nbcuda.jit(device=True, fastmath=True, opt=True)
+def lap_jit(rows, cols, ws, arr, res, d):
+    for i, row in enumerate(rows):
+        res[row] += d[row] * ws[i] * (d[row]*arr[row] - d[cols[i]]*arr[cols[i]])
+    return res
+"""
+        exec(_code, locals())
+        return eval("lap_jit")
         
     @pycrt.enforce_precision(i="arr")
     def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
@@ -435,23 +443,12 @@ class GraphLaplacian(pyca.SelfAdjointOp, _GraphOpBase):
         ``pyct.NDArray``
             Output array with ``N`` elements.
         """
-        self._apply_update_rcd(arr)
-        xp = pycu.get_array_module(arr)
-        y = xp.zeros((self._N,))
-        
-        if self._lap_type == "combinatorial":
-            diff = arr[self._wrow] - arr[self._wcol]
-            weighted_diff = diff * self._wdata
-            return self._sum_diff_vertex(self._wrow, weighted_diff, y)
-        else:
-            raise NotImplementedError("Matrix-free Normalized Laplacian Implementation not supported yet")
-    
-    @staticmethod
-    @nb.jit(parallel=True, nopython=True)
-    def _sum_diff_vertex(row, diff, y):
-        for i in range(len(row)):
-            y[row[i]] += diff[i]
-        return y
+        ndi = pycd.NDArrayInfo.from_obj(arr)
+        arr = pycgspu.cast_warn(arr, self._dtype, ndi, self._arraymodule, self._enable_warnings)
+        res = self._compute_lap(self._wrow, self._wcol, self._wdata, arr, arr*0.0, self._lapd)
+        return pycgspu.convert_arr(res, self._arraymodule, ndi)
+ 
+ 
     
 
 class GraphHessian(pyca.LinOp):
@@ -463,35 +460,25 @@ class GraphHessian(pyca.LinOp):
     TODO: Solve this.
     """
     
-    def __init__(self, Graph):
+    def __init__(self, W):
         
-        self.W_lil = Graph.W
-        self.W = Graph.W.tocoo()
-        self._N = Graph.N
+        self._wrow, self._wcol, self._wdata = pycgspu.canonical_repr(W)
+
+        self._N = len(self._wdata)
+        super().__init__(shape=(self._N*self._N*self._N, Graph.N))
         
-        super().__init__(shape=(Graph.Ne*Graph.Ne, Graph.N))
+        
         
     @pycrt.enforce_precision(i="arr")
     def apply(self, arr: pyct.NDArray) -> pyct.NDArray:
         r"""
         """
-        xp = pycu.get_array_module(arr)
-        # List of sparse matrices
-        H = self._sum_diff_vertex(arr, self._N, self.W.row, self.W.col, [], xp)
-        return self._out
+        raise NotImplementedError("Graph Hessian Not Supported!")
 
-    @nb.jit(parallel=True, forceobj=True)
-    def _sum_diff_vertex(self, arr, N, row, col, H, xp):
-        for i in range(N):
-            sub_col = col[row==i]
-            sub_col_x, sub_col_y = xp.meshgrid(sub_col, sub_col)
-            sub_col_x = xp.ravel(sub_col_x)
-            sub_col_y = xp.ravel(sub_col_y)
-            H.append(((arr[i] - arr[sub_col_x]) * self.W_lil()[i,sub_col_x] + (arr[row[i]] - arr[sub_col_y]) * self.W_lil()[i,sub_col_y])/2)
-        return H
 
     @pycrt.enforce_precision(i="arr")
     def adjoint(self, arr):#: pyct.NDArray) -> pyct.NDArray:
         r"""
         """
         raise NotImplementedError("Adjoint of Graph Hessian Not Supported!")
+
