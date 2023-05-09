@@ -3,7 +3,7 @@ import numpy as np
 import numba as nb
 
 import pycsou.util as pycu
-import pycgsp.util.sparse_array as pycgspsp
+import pycgsp.util.sparse as pycgspsp
 
 def filterbank_handler(func):
 
@@ -101,14 +101,14 @@ def cheby_op(xp, L, N, lmax, c, signal):
         r = xp.zeros((N * Nscales, Nv))
     except IndexError:
         r = xp.zeros((N * Nscales))
-
+    
     a_arange = [0, lmax]
 
     a1 = float(a_arange[1] - a_arange[0]) / 2.
     a2 = float(a_arange[1] + a_arange[0]) / 2.
 
     twf_old = signal
-    twf_cur = (L.dot(signal) - a2 * signal) / a1
+    twf_cur = 2*(L.dot(signal) - a2 * signal) / a1
 
     tmpN = xp.arange(N, dtype=int)
     for i in range(Nscales):

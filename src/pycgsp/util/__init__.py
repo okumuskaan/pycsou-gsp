@@ -1,2 +1,4 @@
-from pycgsp.util.sparse_array import *
-from pycgsp.util.cheby_utils import *
+from pycgsp.util.cheby import *
+from pycgsp.util.sparse import *
+from pycgsp.util.conversion import *
+from pycgsp.util.graphop import *
