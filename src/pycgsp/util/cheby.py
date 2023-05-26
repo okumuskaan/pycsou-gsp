@@ -5,29 +5,8 @@ import numba as nb
 import pycsou.util as pycu
 import pycgsp.util.sparse as pycgspsp
 
-def filterbank_handler(func):
 
-    # Preserve documentation of func.
-    @functools.wraps(func)
-
-    def inner(f, *args, **kwargs):
-
-        if 'i' in kwargs:
-            return func(f, *args, **kwargs)
-
-        elif f.Nf <= 1:
-            return func(f, *args, **kwargs)
-
-        else:
-            output = []
-            for i in range(f.Nf):
-                output.append(func(f, *args, i=i, **kwargs))
-            return output
-
-    return inner
-
-
-def compute_cheby_coeff(xp, kernel, lmax, m=30, N=None):
+def compute_cheby_coeff(kernel, lmax, m=30, N=None, xp=np):
     r"""
     Compute Chebyshev coefficients for a Filterbank.
     Parameters
@@ -66,7 +45,7 @@ def compute_cheby_coeff(xp, kernel, lmax, m=30, N=None):
 
     return c
     
-def cheby_op(xp, L, N, lmax, c, signal):
+def cheby_op(L, N, lmax, c, signal, xp=np):
     r"""
     Chebyshev polynomial of graph Laplacian applied to vector.
     Parameters
@@ -124,3 +103,30 @@ def cheby_op(xp, L, N, lmax, c, signal):
         twf_cur = twf_new
 
     return r
+
+def _cheby(order, max_order, prev):
+    # Given order k, it will return the multipliers for each power
+    #             ┌
+    #             │ 1                               if  k = 0
+    # T_{k}(y) =  ┤ y                               if  k = 1
+    #             │ 2y T_{k-1}(y) - T_{k-2}(y)      otherwise
+    #             └
+    coefs = np.zeros(max_order+1, dtype="int")
+    if order == 0:
+        coefs[-1] += 1
+    elif order == 1:
+        coefs[-2] += 1
+    else:
+        coefs[:-1] += 2 * prev[-1][1:]
+        coefs-= prev[-2]
+    return coefs
+
+
+def compute_cheby_polynomial(coefs):
+    output = []
+    max_order = len(coefs)
+    for order in range(max_order):
+        res = _cheby(order, max_order, output)
+        output.append(res)
+    order_coefs = coefs.reshape(-1, 1) * np.array(output)
+    return order_coefs.sum(0) # or sum(1) not sure
