@@ -111,13 +111,13 @@ def _cheby(order, max_order, prev):
     # T_{k}(y) =  ┤ y                               if  k = 1
     #             │ 2y T_{k-1}(y) - T_{k-2}(y)      otherwise
     #             └
-    coefs = np.zeros(max_order+1, dtype="int")
+    coefs = np.zeros(max_order+1, dtype="float")
     if order == 0:
-        coefs[-1] += 1
+        coefs[-1] += 1.0
     elif order == 1:
-        coefs[-2] += 1
+        coefs[-2] += 1.0
     else:
-        coefs[:-1] += 2 * prev[-1][1:]
+        coefs[:-1] += 2.0 * prev[-1][1:]
         coefs-= prev[-2]
     return coefs
 
@@ -129,4 +129,4 @@ def compute_cheby_polynomial(coefs):
         res = _cheby(order, max_order, output)
         output.append(res)
     order_coefs = coefs.reshape(-1, 1) * np.array(output)
-    return order_coefs.sum(0) # or sum(1) not sure
+    return np.flip(order_coefs.sum(0)) # or sum(1) not sure

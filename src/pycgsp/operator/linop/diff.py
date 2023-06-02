@@ -95,20 +95,32 @@ def _compute_div(arr, w, rows, cols):
 """
 
 
+@nb.jit(nopython=True, nogil=True, fastmath=True, cache=False)
+def compute_grad(arr, w, rows, cols):
+    res = np.zeros((len(arr), len(rows)), dtype=w.dtype)
+    for j in range(len(arr)):
+        for i in range(len(rows)):
+            res[j, i] = (arr[j, rows[i]] - arr[j, cols[i]]) * w[i]
+    return res
 
-@nb.jit(nopython=True, parallel=False, nogil=True, fastmath=True, cache=False)
+@nb.jit(nopython=True, nogil=True, fastmath=True, cache=False)
+def compute_div(arr, w, rows, cols, res):
+    for j in range(len(arr)):
+        for i in range(len(rows)):
+            res[j,rows[i]] += w[i] * arr[j,i]
+            res[j,cols[i]] -= w[i] * arr[j,i]
+    return res
+
+"""
+@nb.jit(nopython=True, nogil=True, fastmath=True, cache=False)
 def compute_grad(arr, w, rows, cols):
     res = arr[rows]
     for i in range(len(rows)):
         res[i] = (res[i] - arr[cols[i]]) * w[i]
     return res
 
-@nb.jit(nopython=True, parallel=False, nogil=True, fastmath=True, cache=False)
-def compute_div(arr, w, rows, cols, res):
-    for i in range(len(rows)):
-        res[rows[i]] += w[i] * arr[i]
-        res[cols[i]] -= w[i] * arr[i]
-    return res
+
+"""
 
 
 
@@ -143,7 +155,7 @@ class GraphGradient(pyca.LinOp):
     
     Examples
     --------
-    
+
     
     See Also
     --------
@@ -186,7 +198,10 @@ class GraphGradient(pyca.LinOp):
         ``pyct.NDArray``
             Output of gradient array with :math:`N_e` elements.
         """
-        return compute_grad(arr, self._wdata, self._wrow, self._wcol)
+        sh = arr.shape[:-1]
+        arr = arr.reshape(-1, self.dim)
+        out = compute_grad(arr, self._wdata, self._wrow, self._wcol)
+        return out.reshape(*sh, -1)
 
     @pycrt.enforce_precision(i="arr")
     def adjoint(self, arr: pyct.NDArray) -> pyct.NDArray:
@@ -202,9 +217,14 @@ class GraphGradient(pyca.LinOp):
             Output of adjoint of gradient array with `N` elements.
         """
         xp = pycu.get_array_module(arr)
-        res = xp.zeros(self._N, dtype=self._wdata.dtype)
-        return compute_div(arr, self._wdata, self._wrow, self._wcol, res)
-
+        sh = arr.shape[:-1]
+        print(arr.shape)
+        arr = arr.reshape(-1, self._Ne)
+        res = xp.zeros((1,self._N), dtype=self._wdata.dtype)
+        print(res.shape)
+        out = compute_div(arr, self._wdata, self._wrow, self._wcol, res)
+        print(out.shape)
+        return out.reshape(*sh, -1)
 
 
 
@@ -288,7 +308,7 @@ class GraphDivergence(pyca.LinOp):
         return self._GraphGrad(arr)
 
 
-
+"""
 @nb.jit(nopython=True, fastmath=True, nogil=True, cache=False)
 def compute_lap_comb(arr, wrow, wcol, wdata):
     res = arr*0.0
@@ -305,6 +325,27 @@ def compute_lap_norm(arr, wrow, wcol, wdata, a_sqrt):
         d = wdata[i] * (arr[wrow[i]]/a_sqrt[wrow[i]] - arr[wcol[i]]/a_sqrt[wcol[i]]) 
         res[wrow[i]] +=  d / a_sqrt[wrow[i]]
         res[wcol[i]] -= d / a_sqrt[wcol[i]]
+    return res
+"""
+
+@nb.jit(nopython=True, fastmath=True, nogil=True, cache=False)
+def compute_lap_comb(arr, wrow, wcol, wdata):
+    res = arr*0.0
+    for j in range(len(arr)):
+        for i in range(len(wrow)):
+            d = wdata[i] * (arr[j, wrow[i]] - arr[j, wcol[i]])
+            res[j, wrow[i]] +=  d
+            res[j, wcol[i]] -=  d
+    return res
+
+@nb.jit(nopython=True, fastmath=True, nogil=True, cache=False)
+def compute_lap_norm(arr, wrow, wcol, wdata, a_sqrt):
+    res = arr*0.0
+    for j in range(len(arr)):
+        for i in range(len(wrow)):
+            d = wdata[i] * (arr[j, wrow[i]]/a_sqrt[wrow[i]] - arr[j, wcol[i]]/a_sqrt[wcol[i]])
+            res[j, wrow[i]] += d / a_sqrt[wrow[i]]
+            res[j, wcol[i]] -= d / a_sqrt[wcol[i]]
     return res
     
 class GraphLaplacian(pyca.SelfAdjointOp):
@@ -383,13 +424,24 @@ class GraphLaplacian(pyca.SelfAdjointOp):
         ``pyct.NDArray``
             Output array with ``N`` elements.
         """
+        sh = arr.shape[:-1]
+        arr = arr.reshape(-1, self.dim)
+        if self._lap_type=="combinatorial":
+            out = compute_lap_comb(arr, self._wrow, self._wcol, self._wdata)
+        elif self._lap_type=="normalized":
+            out = compute_lap_norm(arr, self._wrow, self._wcol, self._wdata, self._a_sqrt)
+        else:
+            raise ValueError("Only combintorial or normalized laplacian type are supported.")
+
+        return out.reshape(*sh, -1)
+        """
         if self._lap_type=="combinatorial":
             return compute_lap_comb(arr, self._wrow, self._wcol, self._wdata) 
         elif self._lap_type=="normalized":
             return compute_lap_norm(arr, self._wrow, self._wcol, self._wdata, self._a_sqrt)
         else:
             raise ValueError("Only combintorial or normalized laplacian type are supported.")
- 
+        """
     
 
 class GraphHessian(pyca.LinOp):

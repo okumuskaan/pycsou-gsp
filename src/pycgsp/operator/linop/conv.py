@@ -15,6 +15,7 @@ import pycsou.runtime as pycrt
 import pycsou.util as pycu
 import pycsou.util.ptype as pyct
 import pycgsp.util as pycgspu
+from pycsou.operator.linop import IdentityOp
 import pygsp
 
 
@@ -136,13 +137,16 @@ def GraphConvolution(
             raise ValueError("Coeffs must be given")
         PolyLinOp = _PolyLinOp(LinOp=L, coeffs=coeffs)
     else:
-        #lmax = L.lipschitz(tight=True)*1.01 # Compute it inside init
+        #lmax = L.lipschitz(tight=True)#*1.01 # Compute it inside init
+        a1 = lmax/2.0
+        a2 = lmax/2.0
         coeffs = pycgspu.compute_cheby_coeff(kernel, lmax, m=order)
         polylinop_coeffs = pycgspu.compute_cheby_polynomial(coeffs)
-        PolyLinOp = _PolyLinOp(LinOp=L, coeffs=polylinop_coeffs)
-        print(polylinop_coeffs)
+        Lscaled = (L - IdentityOp(L.shape[0])*a1)/a2
+        PolyLinOp = _PolyLinOp(LinOp=Lscaled, coeffs=polylinop_coeffs)
+        #print(polylinop_coeffs)
     
-    return PolyLinOp
+    return PolyLinOp, coeffs, polylinop_coeffs
 
     
 

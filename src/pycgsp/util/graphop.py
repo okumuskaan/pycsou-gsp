@@ -12,19 +12,19 @@ import pycsou.util.warning as pycuw
 
 def sparse_to_rcd(arr: pyct.SparseArray) -> tuple[pyct.NDArray, pyct.NDArray, pyct.NDArray]:
     r"""
-    Converts sparse weight matrix to numpy (row, col, data)
+    Converts sparse weight matrix to (row, col, data) arrays format
     
     Input sparse matrix is firstly converted to **coo matrix**. Then, (row, col,data) arrays are returned by using the built-in attributes. Input can be either a SCIPY, PYDATA or CUPY sparse matrix.
     
     Parameters
     ----------
     arr: ``pyct.SparseArray``
-        Sparse weight matrix.
+        Sparse weighted adjacency matrix.
     
     Returns
     -------
     ``tuple[pyct.NDArray, pyct.NDArray, pyct.NDArray]``
-        (Row, Column, Data) array tuple. Length of each data is two times # of edges.
+        (Row, Column, Data) array tuple. Length of each data is two times number of edges.
     """
     spi = pycd.SparseArrayInfo.from_obj(arr)
     if (spi == pycd.SparseArrayInfo.SCIPY_SPARSE) or (spi == pycd.SparseArrayInfo.CUPY_SPARSE):
@@ -45,13 +45,13 @@ def sparse_to_rcd(arr: pyct.SparseArray) -> tuple[pyct.NDArray, pyct.NDArray, py
 
 
 
-def canonical_repr(W: typ.Union[pyct.NDArray, pyct.SparseArray]) -> tuple[pyct.NDArray, pyct.NDArray, pyct.NDArray]:
+def canonical_repr(W: typ.Union[pyct.NDArray, pyct.SparseArray], symmetric_matrix: bool = True) -> tuple[pyct.NDArray, pyct.NDArray, pyct.NDArray]:
     """
-    Converts weight matrix W to row, col, data arrays.
+    Converts weight matrix W to (row, col, data) arrays.
     
-    If the matrix is sparse array, then ``_sparse_to_rcd`` is called.
-    If the matrix is array, then nonzero method and accessing is applied. For the DASK array, it's converted to NUMPY array.
-    As a result, (wrow, wcol, wdata) is returned.
+    If the matrix is sparse array, then ``sparse_to_rcd`` function is called.
+    If the matrix is array, then the nonzero method and access by index are applied. For the DASK array, it's converted to NUMPY array.
+    As a result, (wrow, wcol, wdata) array tuple is returned.
     
     Parameters
     ----------
@@ -71,7 +71,14 @@ def canonical_repr(W: typ.Union[pyct.NDArray, pyct.SparseArray]) -> tuple[pyct.N
     else:
         _wrow, _wcol, _wdata = sparse_to_rcd(W)
     
-    _wdata = pycrt.coerce(_wdata)
+    if symmetric_matrix:
+    # Choose only the upper triangular
+        inds = _wcol<=_wrow
+        _wrow = _wrow[inds]
+        _wcol = _wcol[inds]
+        _wdata = _wdata[inds]
+    
+    #_wdata = pycrt.coerce(_wdata)
 
     return (_wrow, _wcol, _wdata)
 
