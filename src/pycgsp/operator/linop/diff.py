@@ -218,12 +218,9 @@ class GraphGradient(pyca.LinOp):
         """
         xp = pycu.get_array_module(arr)
         sh = arr.shape[:-1]
-        print(arr.shape)
         arr = arr.reshape(-1, self._Ne)
         res = xp.zeros((1,self._N), dtype=self._wdata.dtype)
-        print(res.shape)
         out = compute_div(arr, self._wdata, self._wrow, self._wcol, res)
-        print(out.shape)
         return out.reshape(*sh, -1)
 
 
